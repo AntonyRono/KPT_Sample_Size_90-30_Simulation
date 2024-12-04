@@ -126,7 +126,6 @@ server <- function(input, output, session) {
   )
   
   
-  
   # Reactive expression to read uploaded data and extract fuel columns
   fuel_columns <- reactive({
     req(input$data_file)  # Ensure a file is uploaded
@@ -181,13 +180,10 @@ server <- function(input, output, session) {
     }
   })
   
-  # Reactive expression to calculate optimal sample size
-  results <- reactive({
-    population <- simulated_population()
+  # Function to run one simulation and return the optimal sample size
+  run_single_simulation <- function(population, z, target_precision) {
     sample_sizes <- seq(10, 1000, by = 10)
-    z <- input$z_score
-    target_precision <- input$precision / 100
-
+    
     relative_precisions <- sapply(sample_sizes, function(n) {
       sample <- sample(population, n, replace = TRUE)
       mean_sample <- mean(sample)
@@ -195,20 +191,37 @@ server <- function(input, output, session) {
       se <- sd_sample / sqrt(n)
       z * se / mean_sample
     })
-
-    optimal_size <- min(sample_sizes[relative_precisions <= target_precision], na.rm = TRUE)
-
+    
+    min(sample_sizes[relative_precisions <= target_precision], na.rm = TRUE)
+  }
+  
+  # Cross-validation-like process
+  results <- reactive({
+    population <- simulated_population()
+    z <- input$z_score
+    target_precision <- input$precision / 100
+    iterations <- 100  # Number of iterations for stability
+    
+    # Run simulations iteratively
+    optimal_sizes <- replicate(iterations, run_single_simulation(population, z, target_precision))
+    
+    # Aggregate results (average and mode)
+    recommended_size <- round(mean(optimal_sizes))
+    recommended_mode <- as.numeric(names(sort(table(optimal_sizes), decreasing = TRUE))[1])
+    
     list(
-      sample_sizes = sample_sizes,
-      relative_precisions = relative_precisions,
-      optimal_size = optimal_size
+      sample_sizes = seq(10, 1000, by = 10),
+      relative_precisions = optimal_sizes,  # Keep all iterations for optional visualization
+      optimal_sizes = optimal_sizes,
+      recommended_size = recommended_size,
+      recommended_mode = recommended_mode
     )
   })
-
+  
   # Display optimal sample size
   output$optimal_sample_size <- renderUI({
     req(results())
-    optimal_size <- results()$optimal_size
+    optimal_size <- results()$recommended_size
     
     div(
       style = "padding: 20px; border: 2px solid #0073C2FF; border-radius: 10px; 
@@ -237,16 +250,16 @@ server <- function(input, output, session) {
       theme_minimal()
   })
   
-  # Precision plot
+  # Precision plot (optional visualization of all iterations)
   output$precision_plot <- renderPlot({
     req(results())
     res <- results()
-    ggplot(data.frame(Sample_Size = res$sample_sizes,
-                      Relative_Precision = res$relative_precisions), aes(x = Sample_Size, y = Relative_Precision)) +
-      geom_line(color = "#E69F00", size = 1) +
-      geom_hline(yintercept = input$precision / 100, linetype = "dashed", color = "red") +
-      labs(title = "Relative Precision vs. Sample Size",
-           x = "Sample Size", y = "Relative Precision") +
+    ggplot(data.frame(Iteration = 1:length(res$optimal_sizes), 
+                      Optimal_Size = res$optimal_sizes), aes(x = Iteration, y = Optimal_Size)) +
+      geom_point(color = "#E69F00", size = 3) +
+      geom_hline(yintercept = res$recommended_size, linetype = "dashed", color = "blue") +
+      labs(title = "Optimal Sample Sizes Across Iterations", 
+           x = "Iteration", y = "Optimal Sample Size") +
       theme_minimal()
   })
 }
