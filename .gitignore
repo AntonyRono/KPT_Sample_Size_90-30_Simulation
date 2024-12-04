@@ -47,3 +47,8 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Unneeded Directory
+Archived/
+Export files/
+Import files/
