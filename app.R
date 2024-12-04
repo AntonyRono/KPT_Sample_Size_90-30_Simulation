@@ -61,14 +61,10 @@ ui <- fluidPage(
         numericInput("zero_inflation", "Zero Inflation Rate (%):", value = 80, min = 0, max = 100, step = 1)
       ),
       
-      # Non-parametric file upload
-      # conditionalPanel(
-      #   condition = "input.method == 'non_parametric'",
-      #   fileInput("data_file", "Upload Your Data (CSV):", accept = ".csv")
-      # ),
-      
       conditionalPanel(
         condition = "input.method == 'non_parametric'",
+        h4("Upload and Settings"),
+        downloadButton("download_template", "Download Template for Uploading Data", class = "btn btn-warning btn-block", style = "white-space: normal;"),
         fileInput("data_file", "Upload Your Data (CSV):", accept = c(".csv", ".xlsx")),
         uiOutput("fuel_selector")  # Dynamically generated fuel options
       ),
@@ -97,6 +93,39 @@ ui <- fluidPage(
 
 # Server
 server <- function(input, output, session) {
+  
+  
+  
+  # Preliminary Step: Donwload Template -------------------------------------
+  
+  output$download_template <- downloadHandler(
+    filename = function() {
+      "Template_with_Dummy_Records.xlsx"  # Filename for the template
+    },
+    content = function(file) {
+      library(openxlsx)
+      
+      # Define the template structure and dummy data
+      template_data <- data.frame(
+        id = c("ID1", "ID2", "ID3"),
+        fuel_type1 = c(1.4, 1.5, 1.6),
+        fuel_type2 = c(0, 0, 1.4),
+        fuel_type3 = c(1.6, 2.2, 0),
+        fuel_type4 = c(0, 0.2, 0.1),
+        stringsAsFactors = FALSE
+      )
+      
+      # Create the Excel workbook
+      wb <- createWorkbook()
+      addWorksheet(wb, "Template")
+      writeData(wb, "Template", template_data)
+      
+      # Save the workbook to the file path specified by the user
+      saveWorkbook(wb, file, overwrite = TRUE)
+    }
+  )
+  
+  
   
   # Reactive expression to read uploaded data and extract fuel columns
   fuel_columns <- reactive({
