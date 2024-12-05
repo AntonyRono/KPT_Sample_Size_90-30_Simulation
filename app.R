@@ -2,6 +2,8 @@ library(shiny)
 library(ggplot2)
 library(shinythemes)
 library(readxl)
+library(gridExtra)
+library(MASS)
 
 # UI
 ui <- fluidPage(
@@ -56,9 +58,9 @@ ui <- fluidPage(
       # Parametric inputs
       conditionalPanel(
         condition = "input.method == 'parametric'",
-        numericInput("mean", "Mean of Non-Zero Values:", value = 5, step = 0.1),
-        numericInput("sd", "Standard Deviation of Non-Zero Values:", value = 2, step = 0.1),
-        numericInput("zero_inflation", "Zero Inflation Rate (%):", value = 80, min = 0, max = 100, step = 1)
+        numericInput("mean", "Mean of Non-Zero Values:", value = 0.5, step = 0.1),
+        numericInput("sd", "Standard Deviation of Non-Zero Values:", value = 0.42, step = 0.1),
+        numericInput("zero_inflation", "Zero Inflation Rate (%):", value = 50, min = 0, max = 100, step = 1)
       ),
       
       conditionalPanel(
@@ -93,8 +95,6 @@ ui <- fluidPage(
 
 # Server
 server <- function(input, output, session) {
-  
-  
   
   # Preliminary Step: Donwload Template -------------------------------------
   
@@ -158,32 +158,57 @@ server <- function(input, output, session) {
     data[[input$selected_fuel]]  # Return the selected fuel column
   })
   
-  
-  # Reactive expression to simulate the population
+ # Reactive expression to simulate the population
   simulated_population <- reactive({
     req(input$run_simulation)
-    
+
     if (input$method == "parametric") {
       # Parametric simulation
       zero_count <- round(input$population_size * input$zero_inflation / 100)
       non_zero_count <- input$population_size - zero_count
       zeros <- rep(0, zero_count)
-      non_zeros <- rlnorm(non_zero_count, 
-                          meanlog = log(input$mean^2 / sqrt(input$mean^2 + input$sd^2)), 
+      non_zeros <- rlnorm(non_zero_count,
+                          meanlog = log(input$mean^2 / sqrt(input$mean^2 + input$sd^2)),
                           sdlog = sqrt(log(1 + (input$sd^2 / input$mean^2))))
       c(zeros, non_zeros)
-      
+
     } else if (input$method == "non_parametric") {
       req(selected_fuel_data())
       selected_fuel_data()  # Use the uploaded data for the selected fuel
       
+      # kde <- density(selected_fuel_data(), from = 0)  # Estimate density
+      # sample(kde$x, size = input$population_size, prob = kde$y, replace = TRUE)
+      
+      # fuel_data <- selected_fuel_data()
+      # 
+      # # Remove NA values
+      # fuel_data <- fuel_data[!is.na(fuel_data)]
+      # 
+      # # Separate zeros and non-zeros
+      # zero_count <- sum(fuel_data == 0)
+      # total_count <- length(fuel_data)
+      # observed_zero_inflation <- zero_count / total_count
+      # 
+      # # Kernel Density Estimation for non-zero values
+      # non_zero_data <- fuel_data[fuel_data > 0]
+      # kde <- density(non_zero_data, from = 0)  # KDE for non-zero values only
+      # 
+      # # Generate synthetic non-zero data
+      # synthetic_non_zero_data <- sample(kde$x, size = input$population_size, prob = kde$y, replace = TRUE)
+      # 
+      # # Determine number of zeros based on input or observed zero inflation
+      # desired_zero_count <- round(input$population_size * input$zero_inflation / 100)
+      # #zeros_to_add <- ifelse(input$zero_inflation > 0, desired_zero_count, round(observed_zero_inflation * input$population_size))
+      # zeros_to_add <- round(input$population_size * input$zero_inflation / 100)
+      # 
+      # # Combine zeros and synthetic non-zero data
+      # c(rep(0, zeros_to_add), synthetic_non_zero_data[1:(input$population_size - zeros_to_add)])
+
     }
   })
-  
-  # Function to run one simulation and return the optimal sample size
-  run_single_simulation <- function(population, z, target_precision) {
-    sample_sizes <- seq(10, 1000, by = 10)
-    
+
+  # Function to compute relative precision for all sample sizes in one iteration
+  compute_precision <- function(population, z, target_precision, sample_sizes) {
     relative_precisions <- sapply(sample_sizes, function(n) {
       sample <- sample(population, n, replace = TRUE)
       mean_sample <- mean(sample)
@@ -191,77 +216,96 @@ server <- function(input, output, session) {
       se <- sd_sample / sqrt(n)
       z * se / mean_sample
     })
-    
-    min(sample_sizes[relative_precisions <= target_precision], na.rm = TRUE)
+    min_sample_size <- min(sample_sizes[relative_precisions <= target_precision], na.rm = TRUE)
+    list(relative_precisions = relative_precisions, min_sample_size = min_sample_size)
   }
   
-  # Cross-validation-like process
+  # Cross-validation process
   results <- reactive({
     population <- simulated_population()
     z <- input$z_score
     target_precision <- input$precision / 100
+    sample_sizes <- seq(10, 1000, by = 10)
     iterations <- 100  # Number of iterations for stability
     
-    # Run simulations iteratively
-    optimal_sizes <- replicate(iterations, run_single_simulation(population, z, target_precision))
+    # Perform cross-validation
+    iteration_results <- replicate(iterations, compute_precision(population, z, target_precision, sample_sizes), simplify = FALSE)
+    all_precisions <- do.call(cbind, lapply(iteration_results, `[[`, "relative_precisions"))  # Combine precision arrays
+    optimal_sizes <- sapply(iteration_results, `[[`, "min_sample_size")
     
-    # Aggregate results (average and mode)
+    # Aggregate results
     recommended_size <- round(mean(optimal_sizes))
-    recommended_mode <- as.numeric(names(sort(table(optimal_sizes), decreasing = TRUE))[1])
+    average_precisions <- rowMeans(all_precisions)
     
     list(
-      sample_sizes = seq(10, 1000, by = 10),
-      relative_precisions = optimal_sizes,  # Keep all iterations for optional visualization
+      sample_sizes = sample_sizes,
+      average_precisions = average_precisions,
       optimal_sizes = optimal_sizes,
-      recommended_size = recommended_size,
-      recommended_mode = recommended_mode
+      recommended_size = recommended_size
     )
   })
   
-  # Display optimal sample size
+  # Display recommended sample size
   output$optimal_sample_size <- renderUI({
     req(results())
-    optimal_size <- results()$recommended_size
+    res <- results()
     
     div(
       style = "padding: 20px; border: 2px solid #0073C2FF; border-radius: 10px; 
-            background-color: #f9f9f9; text-align: left; display: flex; align-items: center; 
-            max-width: 600px; margin: 10px 0;",
+              background-color: #f9f9f9; text-align: left; display: flex; align-items: center; 
+              max-width: 600px; margin: 10px 0;",
       div(
         style = "flex: 0 0 150px; font-size: 48px; font-weight: bold; color: #E69F00; text-align: center;",
-        span(optimal_size)
+        span(res$recommended_size)
       ),
       div(
         style = "flex: 1; margin-left: 20px;",
-        h3("Optimal Sample Size", style = "color: #0073C2FF; margin-bottom: 5px;"),
-        p("This is the minimum sample size required to achieve 30% precision based on the 90/30 rule.",
+        h3("Recommended Sample Size", style = "color: #0073C2FF; margin-bottom: 5px;"),
+        p(paste("This is the recommended sample size based on the average of", 
+                length(res$optimal_sizes), "simulations."),
           style = "font-size: 14px; color: #333; margin: 0;")
       )
     )
   })
   
-  # Population histogram
+  # Vizualization of all Iterations & Population histogram
   output$population_hist <- renderPlot({
+    #Histogram of Population Distribution
     req(simulated_population())
     population <- simulated_population()
-    ggplot(data.frame(Value = population), aes(x = Value)) +
+    p1 <- ggplot(data.frame(Value = population), aes(x = Value)) +
       geom_histogram(bins = 30, fill = "#0073C2FF", color = "black", alpha = 0.7) +
       labs(title = "Histogram of Simulated Population", x = "Value", y = "Frequency") +
       theme_minimal()
+    
+    # Chart of Sample Size across iterations
+      req(results())
+      res <- results()
+      p2 <- ggplot(data.frame(Iteration = 1:length(res$optimal_sizes),
+                        Optimal_Size = res$optimal_sizes), aes(x = Iteration, y = Optimal_Size)) +
+        geom_point(color = "#E69F00", size = 3) +
+        geom_hline(yintercept = res$recommended_size, linetype = "dashed", color = "blue") +
+        labs(title = "Optimal Sample Sizes Across Iterations",
+             x = "Iteration", y = "Optimal Sample Size") +
+        theme_minimal()
+      
+      grid.arrange(p2, p1, ncol = 2)
   })
   
-  # Precision plot (optional visualization of all iterations)
+  # Plot of Relative Precision vs. Sample Size
   output$precision_plot <- renderPlot({
     req(results())
     res <- results()
-    ggplot(data.frame(Iteration = 1:length(res$optimal_sizes), 
-                      Optimal_Size = res$optimal_sizes), aes(x = Iteration, y = Optimal_Size)) +
-      geom_point(color = "#E69F00", size = 3) +
-      geom_hline(yintercept = res$recommended_size, linetype = "dashed", color = "blue") +
-      labs(title = "Optimal Sample Sizes Across Iterations", 
-           x = "Iteration", y = "Optimal Sample Size") +
+    ggplot(data.frame(Sample_Size = res$sample_sizes, 
+                      Average_Precision = res$average_precisions), aes(x = Sample_Size, y = Average_Precision)) +
+      geom_line(color = "#E69F00", size = 1) +
+      geom_hline(yintercept = input$precision / 100, linetype = "dashed", color = "red") +
+      geom_vline(xintercept = res$recommended_size, linetype = "dotted", color = "blue") +
+      labs(title = "Relative Precision vs. Sample Size", 
+           x = "Sample Size", y = "Average Relative Precision") +
       theme_minimal()
   })
+  
 }
 
 # Run the app

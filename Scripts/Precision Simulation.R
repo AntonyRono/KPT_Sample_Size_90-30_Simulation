@@ -5,7 +5,6 @@
 z_score <- 1.645  # Z-score for 90% confidence
 relative_precision <- 0.30  # Desired relative precision (30%)
 
-
 # Parametric Estimation ---------------------------------------------------
 
 # Parameters
@@ -144,3 +143,64 @@ ggplot(results, aes(x = Sample_Size, y = Relative_Precision)) +
        x = "Sample Size",
        y = "Relative Precision") +
   theme_minimal()
+
+
+
+x <- read.delim('clipboard')
+x$Charcoal
+fuel_data <- x$Charcoal
+  
+  # Remove NA values
+  fuel_data <- fuel_data[!is.na(fuel_data)]
+  
+  # Separate zeros and non-zeros
+  zero_count <- sum(fuel_data == 0)
+  total_count <- length(fuel_data)
+  observed_zero_inflation <- zero_count / total_count
+  
+  # Kernel Density Estimation for non-zero values
+  non_zero_data <- fuel_data[fuel_data > 0]
+  kde <- density(non_zero_data, from = 0)  # KDE for non-zero values only
+  
+  # Generate synthetic non-zero data
+  synthetic_non_zero_data <- sample(kde$x, size = 1000, prob = kde$y, replace = TRUE)
+  
+  # Determine number of zeros based on input or observed zero inflation
+  desired_zero_count <- round(1000 * observed_zero_inflation )
+  zeros_to_add <- ifelse(observed_zero_inflation> 0, desired_zero_count, round(observed_zero_inflation * 1000))
+  zeros_to_add
+  # Combine zeros and synthetic non-zero data
+  synthetic_data <- c(rep(0, zeros_to_add), synthetic_non_zero_data[1:(1000 - zeros_to_add)])
+  
+  validate_population <- function(original_data, synthetic_data) {
+    original_mean <- mean(original_data, na.rm = TRUE)
+    original_sd <- sd(original_data, na.rm = TRUE)
+    synthetic_mean <- mean(synthetic_data, na.rm = TRUE)
+    synthetic_sd <- sd(synthetic_data, na.rm = TRUE)
+    
+    list(
+      mean_diff = abs(original_mean - synthetic_mean),
+      sd_diff = abs(original_sd - synthetic_sd)
+    )
+  }
+  
+  # Validate and adjust synthetic population
+  validation <- validate_population(fuel_data, synthetic_data)
+  
+  if (validation$mean_diff > 0.01 || validation$sd_diff > 0.01) {
+    warning("Synthetic population differs significantly from the original data. Check your settings.")
+  }
+
+  
+  compare_precision <- function(data, z, target_precision, sample_size) {
+    sample <- sample(data, sample_size, replace = TRUE)
+    mean_sample <- mean(sample)
+    sd_sample <- sd(sample)
+    se <- sd_sample / sqrt(sample_size)
+    precision <- z * se / mean_sample
+    list(precision = precision, meets_target = precision <= target_precision)
+  }
+  
+  # Example usage for validation:
+  original_precision <- compare_precision(fuel_data, z = z_score, target_precision = 0.3, sample_size = 60)
+  synthetic_precision <- compare_precision(synthetic_data, z = z_score, target_precision = 0.3, sample_size = 60)
